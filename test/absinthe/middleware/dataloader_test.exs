@@ -16,6 +16,8 @@ defmodule Absinthe.Middleware.DataloaderTest do
                             name: "Organization: ##{&1}"
                           }}
                        )
+                       |> Map.put(4, nil)
+
         @users 1..3
                |> Enum.map(
                  &%{
@@ -24,6 +26,15 @@ defmodule Absinthe.Middleware.DataloaderTest do
                    organization_id: &1
                  }
                )
+
+        @users_with_organization_misses 3..4
+                                        |> Enum.map(
+                                          &%{
+                                            id: &1,
+                                            name: "User: ##{&1}",
+                                            organization_id: &1
+                                          }
+                                        )
 
         @users_with_organization 1..3
                                  |> Enum.map(
@@ -65,6 +76,10 @@ defmodule Absinthe.Middleware.DataloaderTest do
         object :user do
           field :name, :string
 
+          field :required_organization, non_null(:organization) do
+            resolve dataloader(:test, :organization, args: %{pid: self()})
+          end
+
           field :foo_organization, :organization do
             resolve dataloader(
                       :test,
@@ -100,6 +115,10 @@ defmodule Absinthe.Middleware.DataloaderTest do
         end
 
         query do
+          field :users_with_organization_misses, list_of(:user) do
+            resolve fn _, _, _ -> {:ok, @users_with_organization_misses} end
+          end
+
           field :users, list_of(:user) do
             resolve fn _, _, _ -> {:ok, @users} end
           end
@@ -157,6 +176,31 @@ defmodule Absinthe.Middleware.DataloaderTest do
         test_pid: self()
       })
     end
+  end
+
+  test "null trimming is propagated to non dataloaded parents" do
+    doc = """
+    {
+      users_with_organization_misses {
+        organization: required_organization {
+          name
+        }
+      }
+    }
+    """
+
+    expected_data = %{
+      "users_with_organization_failures" => [
+        %{"organization" => %{"name" => "Organization: #3"}},
+        nil
+      ]
+    }
+
+    assert {:ok, %{data: data}} = Absinthe.run(doc, DefaultSchema)
+    assert expected_data == data
+
+    assert_receive(:loading)
+    refute_receive(:loading)
   end
 
   test "can resolve a field using the normal dataloader helper" do
